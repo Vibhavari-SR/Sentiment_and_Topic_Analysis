@@ -1,0 +1,61 @@
+options(timeout = 300)  
+url <- "https://snap.stanford.edu/data/finefoods.txt.gz"
+download.file(url, destfile = "finefoods.txt.gz", method = "libcurl")
+install.packages("dplyr")
+install.packages("vader")
+install.packages("readr")
+install.packages("pbapply")
+install.packages("writexl")
+library(readr)
+library(dplyr)
+library(vader)
+setwd("C:/Users/abhak/Downloads/")
+lines <- read_lines("finefoods.txt.gz")
+review_blocks <- split(lines, cumsum(lines == ""))
+get_field <- function(block, prefix) {
+  line <- block[grepl(paste0("^", prefix), block)]
+  if (length(line) > 0) sub(paste0("^", prefix), "", line) else NA
+}
+parsed_reviews <- lapply(review_blocks[1:5000], function(block) {
+  tibble(
+    productId   = get_field(block, "product/productId: "),
+    userId      = get_field(block, "review/userId: "),
+    profileName = get_field(block, "review/profileName: "),
+    helpfulness = get_field(block, "review/helpfulness: "),
+    score       = as.numeric(get_field(block, "review/score: ")),
+    time        = get_field(block, "review/time: "),
+    summary     = get_field(block, "review/summary: "),
+    text        = get_field(block, "review/text: ")
+  )
+})
+reviews_df <- bind_rows(parsed_reviews)
+clean_reviews <- reviews_df[!is.na(reviews_df$text) & reviews_df$text != "", ]
+clean_reviews$text <- as.character(clean_reviews$text)
+length(clean_reviews$text)
+chunk_size <- 500
+chunks <- split(clean_reviews$text, ceiling(seq_along(clean_reviews$text) / chunk_size))
+library(pbapply)
+sentiment_chunks <- pblapply(chunks, function(chunk) {
+  chunk_sentiments <- lapply(chunk, get_vader)
+  bind_rows(chunk_sentiments)
+})
+sentiment <- bind_rows(sentiment_chunks)
+reviews_with_sentiment <- bind_cols(clean_reviews, sentiment)
+reviews_with_sentiment <- reviews_with_sentiment %>%
+  mutate(
+    compound = as.numeric(compound),
+    pos = as.numeric(pos),
+    neu = as.numeric(neu),
+    neg = as.numeric(neg),
+    but_count = as.numeric(but_count)
+  )
+str(reviews_with_sentiment)
+reviews_with_sentiment <- reviews_with_sentiment %>%
+  mutate(sentiment_label = case_when(
+    compound >= 0.05 ~ "positive",
+    compound <= -0.05 ~ "negative",
+    TRUE ~ "neutral"
+  ))
+head(reviews_with_sentiment)
+library(writexl)
+write_xlsx(reviews_with_sentiment, "C:/Users/abhak/Downloads/reviews_with_sentiment.xlsx")
